@@ -23,8 +23,14 @@ const CONFIG = {
   // WhatsApp
   whatsappNumber: '5579996063423', // sem +
 
+  // Dashboard Setup
+  dashboard: {
+    user: 'admin',
+    pass: '1234'
+  },
+
   // Google Apps Script API
-  apiBaseUrl: 'https://script.google.com/macros/s/AKfycbyFC7T58EFRRWtsER_4_0ULtX41XPHTJVOV4YFAZDMxpApe4AS2eXe0TcQTPy1KawLD/exec',
+  apiBaseUrl: 'https://script.google.com/macros/s/AKfycby503UC6C5--cNlUFI1a5WWZYf2Z8TRL3oi_UF3LRbLAGcX17DJ2xXBM1yvDar2oR7m/exec',
 
   // Banners do Carrossel
   // Para Desktop: tamanho recomendado 1200x400px (proporção 3:1)

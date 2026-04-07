@@ -8,6 +8,9 @@ function renderCategorias() {
 function mapearProduto(item) {
   return {
     id: String(item.id),
+    sku: String(item.sku || ''),
+    estoque: Number(item.estoque || 0),
+    estoque_minimo: Number(item.estoque_minimo || 2),
     grupo_id: String(item.grupo_id || item.id || ''),
     cor: String(item.cor || ''),
     nome: String(item.nome || ''),
@@ -47,7 +50,7 @@ function aplicarProdutos(data, isFromCache = false) {
   hideElement(elements.loading);
   showElement(elements.productsGrid);
   renderCategorias();
-  renderProdutos(ativos, !isFromCache); // Animação apenas quando vem da API
+  filtrarProdutos(!isFromCache); // Garante que a primeira carga também passe pela mesma inteligência de UX/Ordenação
   renderCarrinho(); // Atualizar o carrinho para mostrar imagens carregadas
 }
 
@@ -61,9 +64,18 @@ function renderProdutos(lista, useAnimation = false) {
   let index = 0;
 
   lista.forEach(produto => {
-    const disabled = !produto.ativo;
+    // Para renderização de vitrine, se for grupo, vamos calcular estoque agregado do grupo?
+    // Caso a lista aqui já seja filtrada/agrupada visualmente ou a pessoa use master row, o `produto.estoque` representará aquela linha.
+    // O pedido do usuário diz "produto indisponível deve ficar claro... se possível manter o produto visível com compra bloqueada".
+    // Calcula estoque exclusivo da variação atual que está estampada no card
+    const estoqueProduto = Number(produto.estoque) || 0;
+    const minCalculado = Number(produto.estoque_minimo) || 2;
+
+    const semEstoque = estoqueProduto <= 0;
+    const disabled = !produto.ativo || semEstoque;
     const isPopular = produtoClicks[produto.id] > 5;
     const specs = {
+      cor: produto.cor || 'Azul',
       armazenamento: produto.armazenamento || '128GB',
       ram: produto.ram || '4GB',
       camera: produto.camera || '12MP',
@@ -71,7 +83,7 @@ function renderProdutos(lista, useAnimation = false) {
       tela: produto.tela || '6.5"'
     };
 
-    const fullName = produto.categoria ? `${produto.categoria} - ${produto.nome}` : produto.nome;
+    const fullName = produto.categoria ? `${produto.nome} | ${produto.cor} - ${produto.armazenamento}` : produto.nome;
 
     let h = 0;
     for (let i = 0; i < produto.id.length; i++) {
@@ -82,7 +94,13 @@ function renderProdutos(lista, useAnimation = false) {
     const variantLabel = `🔥 ${fakeSales} vendidos`;
 
     let badge = '';
-    if (isPopular) {
+    if (semEstoque) {
+      badge = '<span class="absolute top-3 left-3 z-20 bg-gray-800 text-white text-xs px-3 py-1 rounded-full font-semibold"><i class="fa-solid fa-ban"></i> Indisponível</span>';
+    } else if (estoqueProduto === 1) {
+      badge = '<span class="absolute top-3 left-3 z-20 bg-orange-100 text-orange-800 border border-orange-200 text-xs px-3 py-1 rounded-full font-bold shadow-sm"><i class="fa-solid fa-fire text-orange-500"></i> Apenas 1 unidade!</span>';
+    } else if (estoqueProduto > 1 && estoqueProduto <= minCalculado) {
+      badge = '<span class="absolute top-3 left-3 z-20 bg-yellow-100 text-yellow-800 border border-yellow-200 text-xs px-3 py-1 rounded-full font-semibold shadow-sm"><i class="fa-solid fa-clock text-yellow-600"></i> Poucas unidades</span>';
+    } else if (isPopular) {
       badge = '<span class="absolute top-3 left-3 z-20 bg-yellow-400 text-gray-900 text-xs px-3 py-1 rounded-full font-semibold">★ Popular</span>';
     } else if (Number(produto.preco) < 2500) {
       badge = '<span class="absolute top-3 left-3 z-20 bg-green-400 text-gray-900 text-xs px-3 py-1 rounded-full font-semibold">✓ Melhor Preço</span>';
@@ -114,7 +132,7 @@ function renderProdutos(lista, useAnimation = false) {
         </div>
         ${badge}
         ${conditionBadge}
-        ${disabled ? '<div class="absolute inset-0 bg-white/60 flex items-center justify-center"><span class="text-sm font-semibold text-gray-600">Indisponível</span></div>' : ''}
+        ${semEstoque ? '<div class="absolute inset-0 bg-white/50 backdrop-blur-[2px] flex items-center justify-center pointer-events-none"></div>' : (!produto.ativo ? '<div class="absolute inset-0 bg-white/60 flex items-center justify-center"><span class="text-sm font-semibold text-gray-600">Inativo</span></div>' : '')}
       </div>
       <div class="p-6 space-y-4">
         <div>
@@ -164,7 +182,7 @@ function renderProdutos(lista, useAnimation = false) {
   });
 }
 
-function filtrarProdutos() {
+function filtrarProdutos(useAnimation = false) {
   const query = elements.searchInput.value.trim().toLowerCase();
   const categoria = elements.categorySelect.value;
   const condition = elements.conditionSelect ? elements.conditionSelect.value : 'all';
@@ -178,15 +196,63 @@ function filtrarProdutos() {
     return byCat && byCond && byText;
   });
 
-  if (sort === 'price-low') {
-    filtrados.sort((a, b) => Number(a.preco) - Number(b.preco));
-  } else if (sort === 'price-high') {
-    filtrados.sort((a, b) => Number(b.preco) - Number(a.preco));
-  } else if (sort === 'popular') {
-    filtrados.sort((a, b) => (produtoClicks[b.id] || 0) - (produtoClicks[a.id] || 0));
-  }
+  filtrados.sort((a, b) => {
+    const estA = Number(a.estoque) || 0;
+    const estB = Number(b.estoque) || 0;
 
-  renderProdutos(filtrados);
+    // 1. Indisponíveis (esgotados) sempre no final da lista
+    const dispA = estA > 0 ? 1 : 0;
+    const dispB = estB > 0 ? 1 : 0;
+    if (dispA !== dispB) return dispB - dispA;
+
+    // 2. Se o usuário ativou a ordenação por preço, respeitamos ela para os disponíveis
+    if (sort === 'price-low') return Number(a.preco) - Number(b.preco);
+    if (sort === 'price-high') return Number(b.preco) - Number(a.preco);
+
+    // 3. Ordenação Inteligente UX (Hierarquia Clara)
+    const clicksA = produtoClicks[a.id] || 0;
+    const clicksB = produtoClicks[b.id] || 0;
+
+    const minA = Number(a.estoque_minimo) || 2;
+    const minB = Number(b.estoque_minimo) || 2;
+
+    // Definindo "Tiers" ou "Score" de relevância:
+    // Nível 3: Populares (> 5 cliques)
+    // Nível 2: Apenas 1 Unidade
+    // Nível 1: Poucas Unidades (<= mínimo)
+    // Nível 0: Restante
+    let scoreA = 0, scoreB = 0;
+
+    if (clicksA > 5) scoreA = 3;
+    else if (estA === 1) scoreA = 2;
+    else if (estA <= minA) scoreA = 1;
+
+    if (clicksB > 5) scoreB = 3;
+    else if (estB === 1) scoreB = 2;
+    else if (estB <= minB) scoreB = 1;
+
+    // Ordena do maior score para o menor
+    if (scoreA !== scoreB) {
+      return scoreB - scoreA;
+    }
+
+    // Critérios de desempate se tiverem no mesmo score:
+
+    // a) Número de cliques exato 
+    if (clicksA !== clicksB) {
+      return clicksB - clicksA;
+    }
+
+    // b) Nível de urgência e escassez de estoque (menor estoque na frente)
+    if (estA !== estB) {
+      return estA - estB;
+    }
+
+    // c) Ordem alfabética se empatar tudo
+    return a.nome.localeCompare(b.nome);
+  });
+
+  renderProdutos(filtrados, useAnimation);
 }
 
 // ===== Compare Logic =====
@@ -717,6 +783,11 @@ function updateModalSelection() {
   const statusMsg = document.getElementById('pm-status-msg');
 
   if (match) {
+    const emEstoque = Number(match.estoque) > 0;
+    const isOnlyOne = emEstoque && Number(match.estoque) === 1;
+    const minMatch = Number(match.estoque_minimo) || 2;
+    const isPoucas = emEstoque && Number(match.estoque) > 1 && Number(match.estoque) <= minMatch;
+
     currentTargetId = match.id;
     document.getElementById('pm-image').src = match.imagem;
     document.getElementById('pm-name').textContent = match.categoria ? `${match.categoria} - ${match.nome}` : match.nome;
@@ -724,21 +795,42 @@ function updateModalSelection() {
     document.getElementById('pm-price').textContent = formatarMoedaBRL(Number(match.preco));
     document.getElementById('pm-old-price').textContent = formatarMoedaBRL(Number(match.preco) + 250);
 
-    btnBuy.disabled = false;
-    btnBuy.classList.remove('opacity-50', 'cursor-not-allowed');
-    btnComp.disabled = false;
-    btnComp.classList.remove('opacity-50', 'cursor-not-allowed');
-    statusMsg.classList.add('hidden');
+    if (emEstoque) {
+      btnBuy.disabled = false;
+      btnBuy.classList.remove('opacity-50', 'cursor-not-allowed');
+      btnComp.disabled = false;
+      btnComp.classList.remove('opacity-50', 'cursor-not-allowed');
 
-    const isComp = comparacao.some(c => c.id === currentTargetId);
-    btnComp.textContent = isComp ? '✓ Adicionado' : 'Comparar';
+      if (isOnlyOne) {
+        statusMsg.innerHTML = '<span class="inline-block bg-orange-100 text-orange-800 px-3 py-1 rounded-md text-sm font-bold border border-orange-200"><i class="fa-solid fa-fire text-orange-500 mr-1"></i> Apenas 1 unidade! Corra!</span>';
+        statusMsg.classList.remove('hidden');
+      } else if (isPoucas) {
+        statusMsg.innerHTML = '<span class="inline-block bg-yellow-100 text-yellow-800 px-3 py-1 rounded-md text-sm font-bold border border-yellow-200"><i class="fa-solid fa-clock text-yellow-600 mr-1"></i> Poucas unidades restantes</span>';
+        statusMsg.classList.remove('hidden');
+      } else {
+        statusMsg.classList.add('hidden');
+      }
+
+      const isComp = comparacao.some(c => c.id === currentTargetId);
+      btnComp.textContent = isComp ? '✓ Adicionado' : 'Comparar';
+    } else {
+      btnBuy.disabled = true;
+      btnBuy.classList.add('opacity-50', 'cursor-not-allowed');
+      btnComp.disabled = true;
+      btnComp.classList.add('opacity-50', 'cursor-not-allowed');
+      statusMsg.innerHTML = '<span class="inline-block bg-red-100 text-red-800 px-3 py-1 rounded-md text-sm font-bold border border-red-200"><i class="fa-solid fa-xmark mr-1"></i> Esgotado</span>';
+      statusMsg.classList.remove('hidden');
+      btnComp.textContent = 'Indisponível';
+    }
   } else {
     currentTargetId = '';
     btnBuy.disabled = true;
     btnBuy.classList.add('opacity-50', 'cursor-not-allowed');
     btnComp.disabled = true;
     btnComp.classList.add('opacity-50', 'cursor-not-allowed');
+    statusMsg.innerHTML = 'Opção não disponível';
     statusMsg.classList.remove('hidden');
+    btnComp.textContent = 'Comparar';
 
     if (modalVariacoes[0]) {
       document.getElementById('pm-image').src = modalVariacoes[0].imagem;

@@ -147,7 +147,10 @@ async function finalizarPedido() {
     itens: carrinho.map(item => {
       const produto = produtos.find(p => String(p.id) === String(item.id)) || item;
       return {
+        id: produto.id || item.id,
+        sku: produto.sku || '',
         nome: produto.nome || item.nome,
+        group_id: produto.grupo_id || '',
         marca: produto.categoria || 'N/A',
         armazenamento: produto.armazenamento || 'N/A',
         cor: produto.cor || 'N/A',
@@ -193,7 +196,10 @@ function comprarViaWhatsApp(produtoId) {
 
   const pedidoObj = {
     itens: [{
+      id: produto.id,
+      sku: produto.sku || '',
       nome: produto.nome,
+      group_id: produto.grupo_id || '',
       marca: produto.categoria || 'N/A',
       armazenamento: produto.armazenamento || 'N/A',
       cor: produto.cor || 'N/A',
