@@ -27,6 +27,13 @@ function doGet(e) {
   }
 }
 
+// Executar essa função manualmente no Google Apps Script para forçar a tela de permissões de GRAVAÇÃO do Drive
+function autorizarDrive() {
+  var folder = DriveApp.createFolder('Vendly Autorizacao Temporaria');
+  folder.setTrashed(true); // exclui imediatamente
+  Logger.log('Permissões de gravação do Google Drive concedidas com sucesso!');
+}
+
 function doPost(e) {
   var action = (e.parameter.action || '').toLowerCase();
   
@@ -34,9 +41,9 @@ function doPost(e) {
     try {
       var payload = {};
       if (e.postData && e.postData.contents) payload = JSON.parse(e.postData.contents);
-      if (!payload.pedido_id || !payload.status) throw new Error('ID ou Status não fornecidos.');
+      if (!payload.item_id || !payload.status) throw new Error('ID ou Status não fornecidos.');
       
-      var res = atualizarStatusPedido(payload.pedido_id, payload.status);
+      var res = atualizarStatusPedido(payload.item_id, payload.status, payload.final_price);
       return buildResponse({ ok: true, rowsUpdated: res });
     } catch (err) {
       return buildResponse({ ok: false, error: err.toString() });
@@ -55,9 +62,69 @@ function doPost(e) {
       return buildResponse({ ok: false, error: err.toString() });
     }
   }
+
+  if (action === 'salvar_produto') {
+    try {
+      var payload = {};
+      if (e.postData && e.postData.contents) payload = JSON.parse(e.postData.contents);
+      if (!payload.produtos || !Array.isArray(payload.produtos) || payload.produtos.length === 0) throw new Error('Nenhum produto fornecido.');
+      var res = salvarNovoProduto(payload.produtos);
+      return buildResponse({ ok: true, count: res });
+    } catch (err) {
+      return buildResponse({ ok: false, error: err.toString() });
+    }
+  }
+  
+  if (action === 'editar_produto') {
+    try {
+      var payload = {};
+      if (e.postData && e.postData.contents) payload = JSON.parse(e.postData.contents);
+      if (!payload.sku) throw new Error('SKU não fornecido.');
+      var res = editarProduto_(payload);
+      return buildResponse({ ok: true, updated: res });
+    } catch (err) {
+      return buildResponse({ ok: false, error: err.toString() });
+    }
+  }
+
+  if (action === 'toggle_ativo') {
+    try {
+      var payload = {};
+      if (e.postData && e.postData.contents) payload = JSON.parse(e.postData.contents);
+      if (!payload.sku) throw new Error('SKU não fornecido.');
+      var res = toggleAtivoProduto_(payload.sku);
+      return buildResponse({ ok: true, ativo: res });
+    } catch (err) {
+      return buildResponse({ ok: false, error: err.toString() });
+    }
+  }
+
+  if (action === 'remover_produto') {
+    try {
+      var payload = {};
+      if (e.postData && e.postData.contents) payload = JSON.parse(e.postData.contents);
+      if (!payload.sku) throw new Error('SKU não fornecido.');
+      removerProduto_(payload.sku);
+      return buildResponse({ ok: true });
+    } catch (err) {
+      return buildResponse({ ok: false, error: err.toString() });
+    }
+  }
+
+  if (action === 'upload_imagem') {
+    try {
+      var payload = {};
+      if (e.postData && e.postData.contents) payload = JSON.parse(e.postData.contents);
+      if (!payload.base64 || !payload.filename) throw new Error('Dados de imagem não fornecidos.');
+      var url = uploadImagemDrive_(payload.base64, payload.filename);
+      return buildResponse({ ok: true, url: url });
+    } catch (err) {
+      return buildResponse({ ok: false, error: err.toString() });
+    }
+  }
   
   if (action !== 'pedido') {
-    return buildResponse({ ok: false, error: 'Ação inválida. Use action=pedido, action=atualizarStatus ou action=salvar_estoque.' });
+    return buildResponse({ ok: false, error: 'Ação inválida.' });
   }
 
   try {
@@ -83,6 +150,11 @@ function getProdutos() {
   var rows = sheet.getDataRange().getValues();
   if (rows.length < 2) return [];
 
+  // Ensure expected columns exist (adds headers if missing)
+  ensureProdutosColumns_(sheet, rows[0]);
+
+  // Reload after potential header changes
+  rows = sheet.getDataRange().getValues();
   var headers = rows[0].map(String);
   var dataRows = rows.slice(1);
 
@@ -91,6 +163,9 @@ function getProdutos() {
     headers.forEach(function(h, idx) {
       obj[h.trim().toLowerCase()] = r[idx];
     });
+
+    var cameraFrontal = String(obj['camera_frontal'] || obj['câmera_frontal'] || obj['camera frontal'] || obj['câmera frontal'] || '');
+    var cameraTraseira = String(obj['camera_traseira'] || obj['câmera_traseira'] || obj['camera traseira'] || obj['câmera traseira'] || '');
     return {
       id: String(obj['id'] || ''),
       sku: String(obj['sku'] || obj['id'] || ''),
@@ -105,16 +180,45 @@ function getProdutos() {
       imagem: String(obj['imagem'] || ''),
       armazenamento: String(obj['armazenamento'] || ''),
       ram: String(obj['ram'] || ''),
-      camera: String(obj['camera'] || ''),
+      // Cameras (new split fields + legacy compatibility)
+      camera_frontal: cameraFrontal,
+      camera_traseira: cameraTraseira,
       bateria: String(obj['bateria'] || ''),
       tela: String(obj['tela'] || ''),
       condicao: String(obj['condição'] || obj['condicao'] || ''),
       ativo: String(obj['ativo'] || '').toLowerCase() === 'true' || obj['ativo'] === true,
-      clicks: Number(obj['clicks'] || 0)
+      custo: Number(obj['custo'] || obj['preco_custo'] || 0),
+      clicks: Number(obj['clicks'] || 0),
+      imei1: String(obj['imei1'] || ''),
+      imei2: String(obj['imei2'] || ''),
+      codigo_serie: String(obj['codigo_serie'] || ''),
+      origem: String(obj['origem'] || ''),
+      saude_bateria: String(obj['saude_bateria'] || '')
     };
   });
+  return itens;
+}
 
-  return itens.filter(function(item) { return item.ativo; });
+function ensureProdutosColumns_(sheet, headerRow) {
+  var headers = (headerRow || []).map(function(h) { return String(h || '').trim().toLowerCase(); });
+  var required = [
+    { key: 'camera_frontal', label: 'camera_frontal' },
+    { key: 'camera_traseira', label: 'camera_traseira' },
+    { key: 'custo', label: 'custo' },
+    { key: 'imei1', label: 'imei1' },
+    { key: 'imei2', label: 'imei2' },
+    { key: 'codigo_serie', label: 'codigo_serie' },
+    { key: 'origem', label: 'origem' },
+    { key: 'saude_bateria', label: 'saude_bateria' }
+  ];
+
+  var missing = required.filter(function(r) { return headers.indexOf(r.key) === -1; });
+  if (!missing.length) return;
+
+  var startCol = headers.length + 1;
+  missing.forEach(function(r, i) {
+    sheet.getRange(1, startCol + i).setValue(r.label);
+  });
 }
 
 function getPedidos() {
@@ -197,6 +301,12 @@ function salvarPedido(pedido) {
     sheet.getRange(1, epCol + 1).setValue('Estoque Processado');
     headers.push('estoque processado');
   }
+  var itemIdCol = headers.indexOf('id do item');
+  if (itemIdCol === -1) {
+    itemIdCol = headers.length;
+    sheet.getRange(1, itemIdCol + 1).setValue('ID do Item');
+    headers.push('id do item');
+  }
 
   var pedidoId = 'PED-' + new Date().getTime();
   var dataHora = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss');
@@ -214,6 +324,11 @@ function salvarPedido(pedido) {
 
       mapHeader('data', dataHora);
       mapHeader('id do pedido', pedidoId);
+      
+      // UNIQUE ITEM ID
+      var itemId = 'ITM-' + new Date().getTime() + '-' + Math.floor(Math.random() * 1000);
+      mapHeader('id do item', itemId);
+
       mapHeader('group id', item.group_id || '');
       mapHeader('marca', item.marca || '');
       mapHeader('produto', item.nome || '');
@@ -233,6 +348,10 @@ function salvarPedido(pedido) {
       for(var i=0; i<headers.length; i++) rowData[i] = '';
       var idxId = headers.indexOf('id do pedido'); if(idxId !== -1) rowData[idxId] = pedidoId;
       var idxData = headers.indexOf('data'); if(idxData !== -1) rowData[idxData] = dataHora;
+      
+      var itemIdEmpty = 'ITM-' + new Date().getTime() + '-MT';
+      var idxItem = headers.indexOf('id do item'); if(idxItem !== -1) rowData[idxItem] = itemIdEmpty;
+      
       var idxProd = headers.indexOf('produto'); if(idxProd !== -1) rowData[idxProd] = 'Pedido Vazio';
       var idxTotal = headers.indexOf('total'); if(idxTotal !== -1) rowData[idxTotal] = Number(pedido.total || 0);
       var idxStatus = headers.indexOf('status'); if(idxStatus !== -1) rowData[idxStatus] = 'Pendente';
@@ -242,7 +361,7 @@ function salvarPedido(pedido) {
   return { pedido_id: pedidoId };
 }
 
-function atualizarStatusPedido(pedidoId, novoStatus) {
+function atualizarStatusPedido(itemId, novoStatus, precoFinal) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = ss.getSheetByName('Pedidos');
   var prodSheet = ss.getSheetByName('Produtos');
@@ -260,11 +379,26 @@ function atualizarStatusPedido(pedidoId, novoStatus) {
   
   if (idColIdx === -1) throw new Error('Coluna "ID do Pedido" não encontrada.');
   
+  // Se não existir ID do Item
+  var itemIdColIdx = headers.indexOf('id do item');
+  if (itemIdColIdx === -1) {
+    itemIdColIdx = headers.length;
+    sheet.getRange(1, itemIdColIdx + 1).setValue('ID do Item');
+    headers.push('id do item');
+  }
+  
   // Se coluna status não existir, crie
   if (statusColIdx === -1) {
     statusColIdx = headers.length;
     sheet.getRange(1, statusColIdx + 1).setValue('Status');
     headers.push('status');
+  }
+  // Se não existir preço_final
+  var finalPriceColIdx = headers.indexOf('preço final');
+  if (finalPriceColIdx === -1) {
+    finalPriceColIdx = headers.length;
+    sheet.getRange(1, finalPriceColIdx + 1).setValue('Preço Final');
+    headers.push('preço final');
   }
   // Se não existir estoque_processado
   if (estProcColIdx === -1) {
@@ -303,27 +437,38 @@ function atualizarStatusPedido(pedidoId, novoStatus) {
   };
 
   for (var i = 1; i < rows.length; i++) {
-    if (String(rows[i][idColIdx]) === String(pedidoId)) {
-      var oldStatus = rows[i][statusColIdx];
+    // BUSCA POR ITEM ID (UNICO)
+    if (String(rows[i][itemIdColIdx]) === String(itemId)) {
       var estProc = estProcColIdx !== -1 ? rows[i][estProcColIdx] : '';
       var sku = skuColIdx !== -1 ? rows[i][skuColIdx] : '';
       var qtd = qtdColIdx !== -1 ? Number(rows[i][qtdColIdx] || 1) : 1;
       
       sheet.getRange(i + 1, statusColIdx + 1).setValue(novoStatus);
       rows[i][statusColIdx] = novoStatus;
+
+      // Atualiza o precoFinal apenas para este item
+      if (precoFinal !== undefined && precoFinal !== null) {
+        sheet.getRange(i + 1, finalPriceColIdx + 1).setValue(precoFinal);
+        rows[i][finalPriceColIdx] = precoFinal;
+      }
       
-      // Regra de Estoque
+      // Regra de Estoque (Sempre por item)
       if (novoStatus === 'Fechado' && estProc !== 'SIM' && sku) {
         safeUpdateEstoque(sku, -qtd);
-        sheet.getRange(i + 1, estProcColIdx + 1).setValue('SIM');
-        rows[i][estProcColIdx] = 'SIM';
-      } else if ((novoStatus === 'Cancelado' || novoStatus === 'Pendente') && estProc === 'SIM' && sku) {
+        if (estProcColIdx !== -1) {
+          sheet.getRange(i + 1, estProcColIdx + 1).setValue('SIM');
+          rows[i][estProcColIdx] = 'SIM';
+        }
+      } else if (novoStatus === 'Cancelado' && estProc === 'SIM' && sku) {
         safeUpdateEstoque(sku, qtd);
-        sheet.getRange(i + 1, estProcColIdx + 1).setValue('ESTORNADO');
-        rows[i][estProcColIdx] = 'ESTORNADO';
+        if (estProcColIdx !== -1) {
+          sheet.getRange(i + 1, estProcColIdx + 1).setValue('NÃO');
+          rows[i][estProcColIdx] = 'NÃO';
+        }
       }
-
+      
       updatedCount++;
+      break; // Saímos do loop pois o item é único
     }
   }
   return updatedCount;
@@ -378,6 +523,149 @@ function salvarEstoqueManualmente(updates) {
   return updatedCount;
 }
 
+function salvarNovoProduto(produtos) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName('Produtos');
+  if (!sheet) throw new Error('Aba Produtos não encontrada.');
+
+  var rows = sheet.getDataRange().getValues();
+  ensureProdutosColumns_(sheet, rows[0]);
+
+  // Reload headers after ensuring columns
+  rows = sheet.getDataRange().getValues();
+  var headers = rows[0].map(function(h) { return String(h || '').trim().toLowerCase(); });
+
+  var fieldMap = {
+    'id': 'id', 'sku': 'sku', 'grupo_id': 'grupo_id', 'nome': 'nome',
+    'descricao': 'descrição', 'categoria': 'categoria', 'preco': 'preço',
+    'custo': 'custo', 'imagem': 'imagem', 'cor': 'cor',
+    'armazenamento': 'armazenamento', 'ram': 'ram',
+    'camera_frontal': 'camera_frontal', 'camera_traseira': 'camera_traseira',
+    'bateria': 'bateria', 'tela': 'tela', 'condicao': 'condição',
+    'ativo': 'ativo', 'estoque': 'estoque', 'estoque_minimo': 'estoque_minimo',
+    'clicks': 'clicks', 'imei1': 'imei1', 'imei2': 'imei2',
+    'codigo_serie': 'codigo_serie', 'origem': 'origem', 'saude_bateria': 'saude_bateria'
+  };
+
+  var count = 0;
+  produtos.forEach(function(prod) {
+    var rowData = new Array(headers.length);
+    for (var i = 0; i < headers.length; i++) rowData[i] = '';
+
+    for (var key in prod) {
+      if (!prod.hasOwnProperty(key)) continue;
+      var sheetHeader = fieldMap[key] || key;
+      var colIdx = headers.indexOf(sheetHeader.toLowerCase());
+      if (colIdx === -1) colIdx = headers.indexOf(key.toLowerCase());
+      if (colIdx !== -1) rowData[colIdx] = prod[key];
+    }
+
+    sheet.appendRow(rowData);
+    count++;
+  });
+
+  return count;
+}
+
+function editarProduto_(payload) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName('Produtos');
+  if (!sheet) throw new Error('Aba Produtos não encontrada.');
+
+  var rows = sheet.getDataRange().getValues();
+  if (rows.length < 2) throw new Error('Planilha vazia.');
+
+  var headers = rows[0].map(function(h) { return String(h || '').trim().toLowerCase(); });
+  var skuCol = headers.indexOf('sku');
+  var idCol = headers.indexOf('id');
+  if (skuCol === -1 && idCol === -1) throw new Error('Colunas SKU/ID não encontradas.');
+
+  var fieldMap = {
+    'nome': 'nome', 'descricao': 'descrição', 'categoria': 'categoria',
+    'preco': 'preço', 'custo': 'custo', 'imagem': 'imagem', 'cor': 'cor',
+    'armazenamento': 'armazenamento', 'ram': 'ram',
+    'camera_frontal': 'camera_frontal', 'camera_traseira': 'camera_traseira',
+    'bateria': 'bateria', 'tela': 'tela', 'condicao': 'condição',
+    'estoque': 'estoque', 'estoque_minimo': 'estoque_minimo',
+    'imei1': 'imei1', 'imei2': 'imei2',
+    'codigo_serie': 'codigo_serie', 'origem': 'origem', 'saude_bateria': 'saude_bateria'
+  };
+
+  var targetSku = String(payload.sku);
+  var found = false;
+
+  for (var i = 1; i < rows.length; i++) {
+    var rowSku = skuCol !== -1 ? String(rows[i][skuCol]) : '';
+    var rowId = idCol !== -1 ? String(rows[i][idCol]) : '';
+    if (rowSku === targetSku || rowId === targetSku) {
+      // Update each field that was sent
+      for (var key in payload) {
+        if (key === 'sku') continue;
+        var sheetHeader = fieldMap[key] || key;
+        var colIdx = headers.indexOf(sheetHeader.toLowerCase());
+        if (colIdx === -1) colIdx = headers.indexOf(key.toLowerCase());
+        if (colIdx !== -1) {
+          sheet.getRange(i + 1, colIdx + 1).setValue(payload[key]);
+        }
+      }
+      found = true;
+      break;
+    }
+  }
+
+  if (!found) throw new Error('Produto com SKU ' + targetSku + ' não encontrado.');
+  return true;
+}
+
+function toggleAtivoProduto_(sku) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName('Produtos');
+  if (!sheet) throw new Error('Aba Produtos não encontrada.');
+
+  var rows = sheet.getDataRange().getValues();
+  var headers = rows[0].map(function(h) { return String(h || '').trim().toLowerCase(); });
+  var skuCol = headers.indexOf('sku');
+  var idCol = headers.indexOf('id');
+  var ativoCol = headers.indexOf('ativo');
+  if (ativoCol === -1) throw new Error('Coluna "ativo" não encontrada.');
+
+  var targetSku = String(sku);
+  for (var i = 1; i < rows.length; i++) {
+    var rowSku = skuCol !== -1 ? String(rows[i][skuCol]) : '';
+    var rowId = idCol !== -1 ? String(rows[i][idCol]) : '';
+    if (rowSku === targetSku || rowId === targetSku) {
+      var currentVal = String(rows[i][ativoCol] || '').toLowerCase();
+      var isActive = currentVal === 'true' || currentVal === 'sim';
+      var newVal = !isActive;
+      sheet.getRange(i + 1, ativoCol + 1).setValue(newVal ? 'true' : 'false');
+      return newVal;
+    }
+  }
+  throw new Error('Produto com SKU ' + targetSku + ' não encontrado.');
+}
+
+function removerProduto_(sku) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName('Produtos');
+  if (!sheet) throw new Error('Aba Produtos não encontrada.');
+
+  var rows = sheet.getDataRange().getValues();
+  var headers = rows[0].map(function(h) { return String(h || '').trim().toLowerCase(); });
+  var skuCol = headers.indexOf('sku');
+  var idCol = headers.indexOf('id');
+
+  var targetSku = String(sku);
+  for (var i = 1; i < rows.length; i++) {
+    var rowSku = skuCol !== -1 ? String(rows[i][skuCol]) : '';
+    var rowId = idCol !== -1 ? String(rows[i][idCol]) : '';
+    if (rowSku === targetSku || rowId === targetSku) {
+      sheet.deleteRow(i + 1);
+      return;
+    }
+  }
+  throw new Error('Produto com SKU ' + targetSku + ' não encontrado.');
+}
+
 function buildResponse(obj) {
   return ContentService
     .createTextOutput(JSON.stringify(obj))
@@ -388,4 +676,29 @@ function doOptions(e) {
   return ContentService
     .createTextOutput('')
     .setMimeType(ContentService.MimeType.TEXT);
+}
+
+// ---- Upload de Imagem para Google Drive ----
+function uploadImagemDrive_(base64Data, filename) {
+  // Remove header if present (e.g. "data:image/jpeg;base64,...")
+  var cleanBase64 = base64Data.replace(/^data:image\/\w+;base64,/, '');
+  var decoded = Utilities.base64Decode(cleanBase64);
+  var blob = Utilities.newBlob(decoded, 'image/jpeg', filename);
+
+  // Get or create folder
+  var folderName = 'Vendly Imagens';
+  var folders = DriveApp.getFoldersByName(folderName);
+  var folder;
+  if (folders.hasNext()) {
+    folder = folders.next();
+  } else {
+    folder = DriveApp.createFolder(folderName);
+  }
+
+  var file = folder.createFile(blob);
+  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+
+  // Return direct image link
+  var fileId = file.getId();
+  return 'https://lh3.googleusercontent.com/d/' + fileId;
 }
