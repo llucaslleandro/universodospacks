@@ -6,6 +6,7 @@ import * as dashboard from './modules/dashboard.js';
 import * as inventory from './modules/inventory.js';
 import * as notifications from './modules/notifications.js';
 import { initOnboarding } from './modules/onboarding.js';
+import { renderMetricas, refreshActiveCount } from './modules/metrics.js';
 
 // ---- INITIALIZATION ----
 const IS_LOGIN_PAGE = window.location.pathname.includes('login.html');
@@ -101,12 +102,14 @@ function setupDashboardListeners() {
   const btnTabGeral = document.getElementById('tab-btn-geral');
   const btnTabEstrategia = document.getElementById('tab-btn-estrategia');
   const btnTabEstoque = document.getElementById('tab-btn-estoque');
+  const btnTabMetricas = document.getElementById('tab-btn-metricas');
   const tabGeral = document.getElementById('tab-geral');
   const tabEstrategia = document.getElementById('tab-estrategia');
   const tabEstoque = document.getElementById('tab-estoque');
+  const tabMetricas = document.getElementById('tab-metricas');
 
-  const tabs = [tabGeral, tabEstrategia, tabEstoque];
-  const btns = [btnTabGeral, btnTabEstrategia, btnTabEstoque];
+  const tabs = [tabGeral, tabEstrategia, tabEstoque, tabMetricas];
+  const btns = [btnTabGeral, btnTabEstrategia, btnTabEstoque, btnTabMetricas];
 
   btnTabGeral?.addEventListener('click', () => ui.setTab(btnTabGeral, tabGeral, btns, tabs));
   btnTabEstrategia?.addEventListener('click', () => ui.setTab(btnTabEstrategia, tabEstrategia, btns, tabs));
@@ -114,6 +117,21 @@ function setupDashboardListeners() {
     ui.setTab(btnTabEstoque, tabEstoque, btns, tabs);
     inventory.renderEstoque({ onEdit: inventory.abrirModalEdicao, dataCallbacks: RENDER_PIPELINE });
   });
+  btnTabMetricas?.addEventListener('click', () => {
+    ui.setTab(btnTabMetricas, tabMetricas, btns, tabs);
+    renderMetricas();
+  });
+
+  // Métricas: Period filter
+  document.getElementById('metricas-period')?.addEventListener('change', () => renderMetricas());
+  document.getElementById('btn-refresh-metricas')?.addEventListener('click', () => renderMetricas());
+
+  // Métricas: Auto-refresh active visitors every 15s while tab is visible
+  setInterval(() => {
+    if (tabMetricas && !tabMetricas.classList.contains('hidden')) {
+      refreshActiveCount();
+    }
+  }, 15000);
 
   // Global Refresh
   document.getElementById('btn-refresh')?.addEventListener('click', () => store.loadDashboardData(RENDER_PIPELINE));

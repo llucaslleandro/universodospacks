@@ -19,6 +19,11 @@ function doGet(e) {
       var produtoId = e.parameter.produtoId || '';
       var clickResult = registrarClick(produtoId);
       return buildResponse({ ok: true, clicks: clickResult.clicks });
+    } else if (action === 'metricas') {
+      var periodo = e.parameter.periodo || 'hoje';
+      result.data = getMetricas_(periodo);
+      result.ok = true;
+      return buildResponse(result);
     } else {
       return buildResponse({ ok: false, error: 'Ação inválida. Use action=produtos, action=click ou action=pedido.' });
     }
@@ -118,6 +123,18 @@ function doPost(e) {
       if (!payload.base64 || !payload.filename) throw new Error('Dados de imagem não fornecidos.');
       var url = uploadImagemDrive_(payload.base64, payload.filename);
       return buildResponse({ ok: true, url: url });
+    } catch (err) {
+      return buildResponse({ ok: false, error: err.toString() });
+    }
+  }
+
+  if (action === 'registrar_evento') {
+    try {
+      var payload = {};
+      if (e.postData && e.postData.contents) payload = JSON.parse(e.postData.contents);
+      if (!payload.tipo) throw new Error('Campo tipo é obrigatório.');
+      registrarEvento_(payload);
+      return buildResponse({ ok: true });
     } catch (err) {
       return buildResponse({ ok: false, error: err.toString() });
     }
@@ -701,4 +718,105 @@ function uploadImagemDrive_(base64Data, filename) {
   // Return direct image link
   var fileId = file.getId();
   return 'https://lh3.googleusercontent.com/d/' + fileId;
+}
+
+// ---- Métricas: Tracking de Eventos da Vitrine ----
+
+var METRICAS_SHEET_NAME_ = 'Métricas';
+var METRICAS_HEADERS_ = ['timestamp', 'tipo', 'session_id', 'produto', 'origem', 'metadata'];
+
+function ensureMetricasSheet_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(METRICAS_SHEET_NAME_);
+  if (!sheet) {
+    sheet = ss.insertSheet(METRICAS_SHEET_NAME_);
+    sheet.appendRow(METRICAS_HEADERS_);
+  }
+  return sheet;
+}
+
+function registrarEvento_(payload) {
+  var sheet = ensureMetricasSheet_();
+  var ts = payload.timestamp || Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss");
+  sheet.appendRow([
+    ts,
+    String(payload.tipo || ''),
+    String(payload.session_id || ''),
+    String(payload.produto || ''),
+    String(payload.origem || ''),
+    String(payload.metadata || '')
+  ]);
+}
+
+function getMetricas_(periodo) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(METRICAS_SHEET_NAME_);
+  if (!sheet) return [];
+
+  var rows = sheet.getDataRange().getValues();
+  if (rows.length < 2) return [];
+
+  var headers = rows[0].map(function(h) { return String(h).trim().toLowerCase(); });
+  var tsCol = headers.indexOf('timestamp');
+  if (tsCol === -1) return [];
+
+  // Calculate date cutoff based on period
+  var now = new Date();
+  var cutoff = new Date();
+
+  switch (periodo) {
+    case 'hoje':
+      cutoff.setHours(0, 0, 0, 0);
+      break;
+    case 'ontem':
+      cutoff.setDate(cutoff.getDate() - 1);
+      cutoff.setHours(0, 0, 0, 0);
+      // Also set upper bound to end of yesterday
+      var upperBound = new Date();
+      upperBound.setHours(0, 0, 0, 0);
+      break;
+    case '7d':
+      cutoff.setDate(cutoff.getDate() - 7);
+      cutoff.setHours(0, 0, 0, 0);
+      break;
+    case '14d':
+      cutoff.setDate(cutoff.getDate() - 14);
+      cutoff.setHours(0, 0, 0, 0);
+      break;
+    case '30d':
+      cutoff.setDate(cutoff.getDate() - 30);
+      cutoff.setHours(0, 0, 0, 0);
+      break;
+    case 'max':
+      cutoff = new Date(0); // epoch
+      break;
+    default:
+      cutoff.setHours(0, 0, 0, 0); // default = hoje
+  }
+
+  var result = [];
+  for (var i = 1; i < rows.length; i++) {
+    var rawTs = rows[i][tsCol];
+    var rowDate;
+    if (rawTs instanceof Date) {
+      rowDate = rawTs;
+    } else {
+      rowDate = new Date(String(rawTs));
+    }
+    if (isNaN(rowDate.getTime())) continue;
+
+    // Apply period filter
+    if (rowDate < cutoff) continue;
+    if (periodo === 'ontem' && upperBound && rowDate >= upperBound) continue;
+
+    var obj = {};
+    headers.forEach(function(h, idx) {
+      obj[h] = rows[i][idx];
+    });
+    // Normalize timestamp to ISO string for frontend
+    obj.timestamp = Utilities.formatDate(rowDate, Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss");
+    result.push(obj);
+  }
+
+  return result;
 }

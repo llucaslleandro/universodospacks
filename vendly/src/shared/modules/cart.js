@@ -3,6 +3,7 @@ import { CONFIG } from '../config.js';
 import { formatarMoedaBRL, salvarClicksLocalStorage } from './utils.js';
 import { elements, hideElement, showElement, openCart, setMessage } from '../../vitrine/modules/ui.js';
 import { registrarClickApi, enviarPedidoApi } from './api.js';
+import { trackProductClick, trackWhatsAppClick, trackMessageSent } from '../../vitrine/modules/tracker.js';
 
 export function atualizarBadge() {
   const quantidadeTotal = store.carrinho.reduce((acc, item) => acc + item.quantidade, 0);
@@ -326,6 +327,9 @@ export function adicionarAoCarrinho(produtoId) {
   salvarClicksLocalStorage();
   registrarClickApi(produtoId);
 
+  // Track product click for metrics
+  trackProductClick(produto);
+
   const itemEmCarrinho = store.carrinho.find(i => i.id === produto.id);
 
   // Se já está no carrinho, apenas abrimos o modal sem adicionar mais (conforme pedido do usuário)
@@ -432,6 +436,10 @@ export async function finalizarPedido() {
 
   const urlWhatsApp = `https://wa.me/${CONFIG.whatsappNumber}?text=${encodeURIComponent(mensagem)}`;
   window.open(urlWhatsApp, '_blank');
+
+  // Track WhatsApp metrics
+  trackWhatsAppClick(store.carrinho);
+  trackMessageSent(store.carrinho);
 
   setMessage('success', 'A mensagem do pedido foi aberta no WhatsApp.');
 }

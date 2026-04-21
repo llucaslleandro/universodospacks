@@ -2,6 +2,7 @@ import { store } from '../../shared/modules/store.js';
 import { salvarClicksLocalStorage, formatarMoedaBRL, extrairNumero, getUniqueValues } from '../../shared/modules/utils.js';
 import { elements, showElement, hideElement, openCart, closeCart, setError, setMessage, aplicarAnimacaoAdicao } from './ui.js';
 import { adicionarAoCarrinho, renderCarrinho } from '../../shared/modules/cart.js';
+import { trackProductView } from './tracker.js';
 
 function renderCategorias() {
   const categorias = ['all', ...new Set(store.produtos.map(p => p.categoria).filter(Boolean))];
@@ -682,6 +683,9 @@ export function openProductModal(grupoId, productId) {
     const clicked = store.modalVariacoes.find(v => v.id === productId);
     if (clicked) baseVar = clicked;
   }
+
+  // Track product view event
+  trackProductView(baseVar);
 
   store.selColor = baseVar.cor;
   store.selStorage = baseVar.armazenamento;
