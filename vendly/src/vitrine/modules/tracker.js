@@ -29,9 +29,14 @@ const SESSION_ID = getSessionId();
 
 // ===== Core Event Emitter =====
 function trackEvent(tipo, data = {}) {
+  const now = new Date();
+  // Format in local timezone (Brasília GMT-3) instead of UTC
+  const pad = (n) => String(n).padStart(2, '0');
+  const localTs = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+
   const payload = {
     tipo,
-    timestamp: new Date().toISOString(),
+    timestamp: localTs,
     session_id: SESSION_ID,
     produto: data.produto || '',
     origem: window.location.href,
@@ -83,33 +88,38 @@ export function trackMessageSent(itens) {
   });
 }
 
-// ===== Auto-tracked: Page Visit =====
+// ===== Auto-tracked: Page Visit (once) =====
 trackEvent('visita_vitrine');
 
-// ===== Heartbeat (60s interval, only when page visible) =====
-let heartbeatTimer = null;
+// ===== Heartbeat (20s interval, throttled, single interval) =====
+const HEARTBEAT_MS = 20000;
+let heartbeatInterval = null;
+let ultimoHeartbeat = 0;
 
-function startHeartbeat() {
-  // Send immediately on start
+function enviarHeartbeat() {
+  const agora = Date.now();
+  if (agora - ultimoHeartbeat < HEARTBEAT_MS) return;
+  ultimoHeartbeat = agora;
   trackEvent('heartbeat');
-
-  heartbeatTimer = setInterval(() => {
-    if (document.visibilityState === 'visible') {
-      trackEvent('heartbeat');
-    }
-  }, 60000);
 }
 
-function handleVisibility() {
-  if (document.visibilityState === 'visible') {
-    if (!heartbeatTimer) startHeartbeat();
-  } else {
-    if (heartbeatTimer) {
-      clearInterval(heartbeatTimer);
-      heartbeatTimer = null;
+function iniciarHeartbeat() {
+  if (heartbeatInterval) return; // never create a second interval
+
+  heartbeatInterval = setInterval(() => {
+    if (!document.hidden) {
+      enviarHeartbeat();
     }
+  }, HEARTBEAT_MS);
+}
+
+// On tab return, send a throttled heartbeat (no new interval)
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    enviarHeartbeat();
   }
-}
+});
 
-document.addEventListener('visibilitychange', handleVisibility);
-startHeartbeat();
+// Start once
+enviarHeartbeat();
+iniciarHeartbeat();
