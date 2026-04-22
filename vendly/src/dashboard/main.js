@@ -189,6 +189,7 @@ function setupDashboardListeners() {
   document.getElementById('cadastro-close')?.addEventListener('click', inventory.fecharModalCadastro);
   document.getElementById('cadastro-cancel')?.addEventListener('click', inventory.fecharModalCadastro);
   document.getElementById('cadastro-submit')?.addEventListener('click', () => inventory.salvarNovoProduto({ dataCallbacks: RENDER_PIPELINE, onEdit: inventory.abrirModalEdicao }));
+  inventory.setupCategoriaHandler();
 
   document.querySelectorAll('.cadastro-tipo-btn').forEach(btn => {
     btn.addEventListener('click', () => inventory.updateTipoButtons(btn.dataset.tipo));

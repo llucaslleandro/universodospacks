@@ -277,6 +277,12 @@ export function abrirModalCadastro() {
     'cad-imei1', 'cad-imei2', 'cad-serie', 'cad-origem', 'cad-saude'
   ].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
 
+  // Reset estoque defaults
+  const estInput = document.getElementById('cad-estoque');
+  if (estInput) estInput.value = '1';
+  const estMinInput = document.getElementById('cad-estoque-min');
+  if (estMinInput) estMinInput.value = '2';
+
   // Reset image
   document.getElementById('cad-img-file').value = '';
   document.getElementById('cad-img-thumb').src = '';
@@ -284,13 +290,25 @@ export function abrirModalCadastro() {
   document.getElementById('cad-img-preview')?.classList.add('hidden');
   document.getElementById('cad-img-loading')?.classList.add('hidden');
 
+  // Reset custom category input
+  const catCustom = document.getElementById('cad-categoria-custom');
+  if (catCustom) { catCustom.value = ''; catCustom.classList.add('hidden'); }
+
   // Populate categories
   const catSelect = document.getElementById('cad-categoria');
   if (catSelect) {
-    const cats = new Set(state.allProducts.map(p => p.categoria || '').filter(Boolean));
+    const cats = [...new Set(state.allProducts.map(p => p.categoria || '').filter(Boolean))].sort();
     catSelect.innerHTML = '<option value="">Selecione...</option>';
-    cats.forEach(c => catSelect.innerHTML += `<option value="${c}">${c}</option>`);
-    catSelect.innerHTML += '<option value="__custom">+ Nova categoria...</option>';
+    cats.forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c;
+      opt.textContent = c;
+      catSelect.appendChild(opt);
+    });
+    const customOpt = document.createElement('option');
+    customOpt.value = '__custom';
+    customOpt.textContent = '+ Nova categoria...';
+    catSelect.appendChild(customOpt);
   }
 
   updateTipoButtons('Novo');
@@ -299,6 +317,9 @@ export function abrirModalCadastro() {
   document.getElementById('cad-var-list').innerHTML = '';
   updateVarButtons(false);
   document.getElementById('cad-errors')?.classList.add('hidden');
+
+  // Clear any previous validation highlights
+  modalCadastro.querySelectorAll('.cad-field-error').forEach(el => el.classList.remove('cad-field-error', 'border-red-400', 'ring-2', 'ring-red-200'));
 
   const modalTitle = modalCadastro.querySelector('h3');
   if (modalTitle) modalTitle.innerHTML = '<i class="fa-solid fa-box-open text-indigo-500 mr-2"></i>Cadastrar Produto';
@@ -399,24 +420,154 @@ function renderVariacoes() {
   list.querySelectorAll('.var-remove').forEach(btn => btn.addEventListener('click', () => { cadastroVariacoes.splice(btn.dataset.idx, 1); renderVariacoes(); }));
 }
 
+// ===== CATEGORY HANDLER =====
+export function setupCategoriaHandler() {
+  const catSelect = document.getElementById('cad-categoria');
+  const catCustom = document.getElementById('cad-categoria-custom');
+  if (!catSelect || !catCustom) return;
+
+  catSelect.addEventListener('change', () => {
+    if (catSelect.value === '__custom') {
+      catCustom.classList.remove('hidden');
+      catCustom.focus();
+    } else {
+      catCustom.classList.add('hidden');
+      catCustom.value = '';
+    }
+  });
+}
+
+// ===== HELPERS =====
+function gerarSlug(texto) {
+  return texto
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
+function gerarIds(nome, cor, armazenamento, condicao) {
+  const grupoId = gerarSlug(nome) || ('prod-' + Date.now());
+  const variacao = [armazenamento, cor, condicao].filter(Boolean).map(gerarSlug).join('-');
+  const sku = variacao ? `${grupoId}-${variacao}` : grupoId;
+  return { id: sku, sku, grupo_id: grupoId };
+}
+
+function getCategoria() {
+  const catSelect = document.getElementById('cad-categoria');
+  if (!catSelect) return '';
+  if (catSelect.value === '__custom') {
+    return (document.getElementById('cad-categoria-custom')?.value || '').trim();
+  }
+  return catSelect.value;
+}
+
+// ===== VALIDAÇÃO =====
+function validarCamposObrigatorios() {
+  const val = (id) => (document.getElementById(id)?.value || '').trim();
+  const erros = [];
+
+  // Clear previous highlights
+  const modal = document.getElementById('modal-cadastro-produto');
+  modal?.querySelectorAll('.cad-field-error').forEach(el => {
+    el.classList.remove('cad-field-error', 'border-red-400', 'ring-2', 'ring-red-200');
+  });
+
+  const markError = (id, msg) => {
+    erros.push(msg);
+    const el = document.getElementById(id);
+    if (el) el.classList.add('cad-field-error', 'border-red-400', 'ring-2', 'ring-red-200');
+  };
+
+  if (!val('cad-nome')) markError('cad-nome', 'Nome do Produto é obrigatório');
+  if (!getCategoria()) markError('cad-categoria', 'Categoria é obrigatória');
+  if (!val('cad-preco') || Number(val('cad-preco')) <= 0) markError('cad-preco', 'Preço é obrigatório e deve ser maior que zero');
+  if (!val('cad-imagem')) markError('cad-imagem', 'Imagem do Produto é obrigatória (faça upload)');
+  if (!val('cad-cor')) markError('cad-cor', 'Cor é obrigatória');
+  if (!val('cad-armazenamento')) markError('cad-armazenamento', 'Armazenamento é obrigatório');
+
+  // Specs
+  if (!val('cad-ram')) markError('cad-ram', 'RAM é obrigatória');
+  if (!val('cad-cam-frontal')) markError('cad-cam-frontal', 'Câmera Frontal é obrigatória');
+  if (!val('cad-cam-traseira')) markError('cad-cam-traseira', 'Câmera Traseira é obrigatória');
+  if (!val('cad-bateria')) markError('cad-bateria', 'Bateria é obrigatória');
+  if (!val('cad-tela')) markError('cad-tela', 'Tela é obrigatória');
+
+  // Seminovo-specific
+  if (cadastroTipo === 'Seminovo') {
+    if (!val('cad-imei1')) markError('cad-imei1', 'IMEI 1 é obrigatório para seminovos');
+    if (!val('cad-origem')) markError('cad-origem', 'Origem é obrigatória para seminovos');
+    if (!val('cad-saude')) markError('cad-saude', 'Saúde da Bateria é obrigatória para seminovos');
+  }
+
+  // Display errors
+  const errContainer = document.getElementById('cad-errors');
+  const errList = document.getElementById('cad-errors-list');
+  if (erros.length > 0) {
+    errList.innerHTML = erros.map(e => `<li>${e}</li>`).join('');
+    errContainer?.classList.remove('hidden');
+    errContainer?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return false;
+  }
+
+  errContainer?.classList.add('hidden');
+  return true;
+}
+
+// ===== SALVAR PRODUTO =====
 export async function salvarNovoProduto(callbacks = {}) {
   const val = (id) => (document.getElementById(id)?.value || '').trim();
   const numVal = (id) => Number(document.getElementById(id)?.value || 0);
 
+  // Run validation (skip for edit mode since some fields may not change)
+  if (!editModeSku && !validarCamposObrigatorios()) return;
+
+  const nome = val('cad-nome');
+  const cor = val('cad-cor');
+  const armazNum = val('cad-armazenamento');
+  const armazUnit = document.getElementById('cad-armaz-unit')?.dataset.unit || 'GB';
+  const armazenamento = armazNum ? armazNum + armazUnit : '';
+  const ramNum = val('cad-ram');
+  const ramUnit = document.getElementById('cad-ram-unit')?.dataset.unit || 'GB';
+
   const payload = {
-    nome: val('cad-nome'),
+    nome: nome,
     descricao: val('cad-desc'),
-    categoria: val('cad-categoria'),
+    categoria: getCategoria(),
     preco: numVal('cad-preco'),
     custo: numVal('cad-custo'),
     imagem: val('cad-imagem'),
-    cor: val('cad-cor'),
-    armazenamento: val('cad-armazenamento') + (document.getElementById('cad-armaz-unit')?.dataset.unit || 'GB'),
+    cor: cor,
+    armazenamento: armazenamento,
+    ram: ramNum ? ramNum + ramUnit : '',
+    camera_frontal: val('cad-cam-frontal') ? val('cad-cam-frontal') + 'MP' : '',
+    camera_traseira: val('cad-cam-traseira') ? val('cad-cam-traseira') + 'MP' : '',
+    bateria: val('cad-bateria') ? val('cad-bateria') + 'mAh' : '',
+    tela: val('cad-tela') ? val('cad-tela') + '"' : '',
     estoque: numVal('cad-estoque'),
+    estoque_minimo: numVal('cad-estoque-min'),
     condicao: cadastroTipo,
+    ativo: 'true',
   };
 
-  if (editModeSku) payload.sku = editModeSku;
+  // Seminovo fields
+  if (cadastroTipo === 'Seminovo') {
+    payload.imei1 = val('cad-imei1');
+    payload.imei2 = val('cad-imei2');
+    payload.codigo_serie = val('cad-serie');
+    payload.origem = val('cad-origem');
+    payload.saude_bateria = val('cad-saude') ? val('cad-saude') + '%' : '';
+  }
+
+  if (editModeSku) {
+    payload.sku = editModeSku;
+  } else {
+    // Generate id, sku, grupo_id for new products
+    const ids = gerarIds(nome, cor, armazenamento, cadastroTipo);
+    payload.id = ids.id;
+    payload.sku = ids.sku;
+    payload.grupo_id = ids.grupo_id;
+  }
 
   try {
     showToast('Salvando...', 'blue', 'fa-spinner', true);
@@ -432,10 +583,11 @@ export async function salvarNovoProduto(callbacks = {}) {
     if (!(await resp.json()).ok) throw new Error('Erro na API');
 
     fecharModalCadastro();
-    showToast('Sucesso!', 'green', 'fa-check');
+    showToast('Produto salvo com sucesso!', 'green', 'fa-check');
     await loadDashboardData(callbacks.dataCallbacks || {}, true);
     renderEstoque(callbacks);
   } catch (err) {
-    showToast('Erro ao salvar.', 'red', 'fa-xmark');
+    console.error('Erro ao salvar produto:', err);
+    showToast('Erro ao salvar produto.', 'red', 'fa-xmark');
   }
 }

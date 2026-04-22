@@ -552,6 +552,29 @@ function salvarNovoProduto(produtos) {
   rows = sheet.getDataRange().getValues();
   var headers = rows[0].map(function(h) { return String(h || '').trim().toLowerCase(); });
 
+  // Ensure id, sku, grupo_id, ativo columns exist
+  var requiredCols = [
+    { key: 'id', label: 'id' },
+    { key: 'sku', label: 'sku' },
+    { key: 'grupo_id', label: 'grupo_id' },
+    { key: 'ativo', label: 'ativo' },
+    { key: 'estoque', label: 'estoque' },
+    { key: 'estoque_minimo', label: 'estoque_minimo' }
+  ];
+  var addedCols = false;
+  requiredCols.forEach(function(r) {
+    if (headers.indexOf(r.key) === -1) {
+      var newCol = headers.length + 1;
+      sheet.getRange(1, newCol).setValue(r.label);
+      headers.push(r.key);
+      addedCols = true;
+    }
+  });
+  if (addedCols) {
+    rows = sheet.getDataRange().getValues();
+    headers = rows[0].map(function(h) { return String(h || '').trim().toLowerCase(); });
+  }
+
   var fieldMap = {
     'id': 'id', 'sku': 'sku', 'grupo_id': 'grupo_id', 'nome': 'nome',
     'descricao': 'descrição', 'categoria': 'categoria', 'preco': 'preço',
@@ -566,6 +589,18 @@ function salvarNovoProduto(produtos) {
 
   var count = 0;
   produtos.forEach(function(prod) {
+    // Fallback: generate id/sku/grupo_id if not provided
+    var fallbackId = 'PROD-' + new Date().getTime() + '-' + Math.floor(Math.random() * 1000);
+    if (!prod.id) prod.id = fallbackId;
+    if (!prod.sku) prod.sku = prod.id;
+    if (!prod.grupo_id) prod.grupo_id = prod.id;
+
+    // Default ativo to 'true' for new products
+    if (prod.ativo === undefined || prod.ativo === '') prod.ativo = 'true';
+
+    // Default estoque
+    if (prod.estoque === undefined || prod.estoque === '') prod.estoque = 0;
+
     var rowData = new Array(headers.length);
     for (var i = 0; i < headers.length; i++) rowData[i] = '';
 
@@ -583,6 +618,9 @@ function salvarNovoProduto(produtos) {
 
   return count;
 }
+
+
+
 
 function editarProduto_(payload) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
